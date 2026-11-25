@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>MirrorNav HUD</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-title" content="HUD Nav">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --fg:#e9fbff; --dim:#79c8d6; --warn:#ffb020; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:#000; overflow:hidden;
+    font-family:-apple-system,"PingFang TC",sans-serif; color:var(--fg); }
+  #stage { position:fixed; inset:0; transform-origin:center; }
+  #stage.mirror { transform:scaleX(-1); }
+  #grid { position:absolute; inset:0; display:grid;
+    grid-template-columns:1fr 1.6fr 1fr; grid-template-rows:1fr auto;
+    padding:calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 18px)
+            calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 18px);
+    gap:8px; align-items:center; }
+  .box { text-align:center; }
+  #speed { font-size:22vmin; font-weight:800; line-height:.9;
+    font-variant-numeric:tabular-nums; text-shadow:0 0 24px #0ff3; }
+  #speed small { display:block; font-size:4vmin; font-weight:500; color:var(--dim); letter-spacing:.2em; }
+  #turnIcon { width:30vmin; height:30vmin; margin:0 auto; display:block;
+    filter:drop-shadow(0 0 18px #00e5ff88); }
+  #turnText { font-size:7vmin; font-weight:700; margin-top:-2vmin; }
+  #turnDist { font-size:8vmin; font-weight:800; color:var(--warn);
+    font-variant-numeric:tabular-nums; text-shadow:0 0 20px #ffb02055; }
+  #right { font-size:5.2vmin; font-weight:600; line-height:1.3; font-variant-numeric:tabular-nums; }
+  #right small { display:block; font-size:3vmin; color:var(--dim); font-weight:400; }
+  #destName { grid-column:1/-1; text-align:center; font-size:3.6vmin; color:var(--dim);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #msg { position:absolute; inset:0; display:none; place-items:center; text-align:center;
+    font-size:5vmin; line-height:1.6; padding:8vmin; }
+  #controls { position:absolute; left:50%; bottom:calc(env(safe-area-inset-bottom) + 12px);
+    transform:translateX(-50%); display:none; gap:10px; z-index:20;
+    background:#0b1418ee; border:1px solid #1f3b44; border-radius:14px; padding:10px 12px; }
+  #controls button { background:#103039; color:var(--fg); border:1px solid #21525f;
+    border-radius:10px; padding:10px 14px; font-size:16px; }
+  #controls button.on { background:#0f5f4a; border-color:#28a57f; }
+  /* 設定目的地 */
+  #setup { position:fixed; inset:0; z-index:50; background:#0b1116; display:none;
+    flex-direction:column; padding:calc(env(safe-area-inset-top) + 8px) 10px calc(env(safe-area-inset-bottom) + 10px); }
+  #setup.open { display:flex; }
+  #setup .bar { display:flex; gap:8px; padding-bottom:8px; }
+  #setup input { flex:1; min-width:0; padding:12px 12px; border-radius:10px; border:1px solid #23343c;
+    background:#121a20; color:#fff; font-size:16px; }
+  #setup button { padding:12px 14px; border-radius:10px; border:0; font-size:16px;
+    background:#2b8a3e; color:#fff; font-weight:600; }
+  #setup button.ghost { background:#243039; font-weight:400; }
+  #map { flex:1; border-radius:12px; overflow:hidden; }
+  #hintBar { font-size:13px; color:#6f9aa6; padding:6px 2px 0; }
+</style>
+</head>
+<body>
+<div id="stage" class="mirror">
+  <div id="grid">
+    <div class="box"><div id="speed">0<small>KM/H</small></div></div>
+    <div class="box">
+      <svg id="turnIcon" viewBox="0 0 100 100"><path id="turnPath"
+        d="M50 92 V30 M50 30 L28 52 M50 30 L72 52" fill="none" stroke="#e9fbff"
+        stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div id="turnText">直行</div>
+      <div id="turnDist">--</div>
+    </div>
+    <div class="box" id="right"></div>
+    <div id="destName">未設定目的地</div>
+  </div>
+  <div id="msg"></div>
+  <div id="controls">
+    <button id="mBtn" class="on">鏡像：開</button>
+    <button id="goBtn">目的地</button>
+    <button id="reBtn">重新算路</button>
+  </div>
+</div>
+
+<div id="setup">
+  <div class="bar">
+    <input id="q" placeholder="搜尋目的地，或直接點地圖" enterkeyhint="search">
+    <button id="sBtn">搜尋</button>
+    <button id="closeBtn" class="ghost">完成</button>
+  </div>
+  <div id="map"></div>
+  <div id="hintBar">點地圖任一處＝設為目的地</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const stage = $('stage');
+const MIRROR_KEY = 'mn.hud.mirror', DEST_KEY = 'mn.hud.dest';
+
+let mirror = localStorage.getItem(MIRROR_KEY) !== '0';
+let me = null, dest = JSON.parse(localStorage.getItem(DEST_KEY) || 'null');
+let steps = [], stepIdx = 1, wakeLock = null, controlsTimer = null;
+let map = null, mapReady = false, meMarker = null, destMarker = null;
+
+/* ---------- 幾何 ---------- */
+function haversine(a, b) {
+  const R = 6371000, rad = Math.PI/180;
+  const dLat = (b.lat-a.lat)*rad, dLng = (b.lng-a.lng)*rad;
+  const s = Math.sin(dLat/2)**2 + Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+function fmt(m) { return m >= 1000 ? (m/1000).toFixed(1)+' km' : Math.max(0, Math.round(m/10)*10)+' m'; }
+
+/* ---------- 轉彎 ---------- */
+const ICONS = {
+  left:'M72 92 V45 H38 M50 56 L34 42 L50 28',
+  right:'M28 92 V45 H62 M50 56 L66 42 L50 28',
+  slightLeft:'M60 92 V55 L36 33 M36 46 V30 H52',
+  slightRight:'M40 92 V55 L64 33 M48 30 H64 V46',
+  straight:'M50 92 V30 M50 30 L28 52 M50 30 L72 52',
+  uturn:'M34 92 V48 a18 18 0 0 1 36 0 V70 M70 70 L58 58 M70 70 L82 58',
+  round:'M50 92 V62 M26 50 a14 14 0 0 1 14-14 h20 M62 28 L50 36 M62 28 L50 20',
+  arrive:'M50 88 V28 M50 28 l-14 12 M50 28 l14 12'
+};
+const LABELS = { left:'左轉', right:'右轉', slightLeft:'稍向左', slightRight:'稍向右',
+  straight:'直行', uturn:'迴轉', round:'圓環', arrive:'抵達' };
+function maneuverKey(m) {
+  const mod=m.modifier||'', type=m.type||'';
+  if (type==='arrive') return 'arrive';
+  if (type==='roundabout'||type==='rotary') return 'round';
+  if (mod==='uturn') return 'uturn';
+  if (mod==='left'||mod==='sharp left') return 'left';
+  if (mod==='right'||mod==='sharp right') return 'right';
+  if (mod==='slight left') return 'slightLeft';
+  if (mod==='slight right') return 'slightRight';
+  return 'straight';
+}
+function setTurn(key, text, dist) {
+  $('turnPath').setAttribute('d', ICONS[key]||ICONS.straight);
+  $('turnText').textContent = text || '';
+  $('turnDist').textContent = dist || '--';
+}
+
+/* ---------- 路線 ---------- */
+async function planRoute(d) {
+  dest = d;
+  localStorage.setItem(DEST_KEY, JSON.stringify(d));
+  $('destName').textContent = '目的地：' + (d.name || '選定點');
+  if (!me) { showMsg('等待 GPS……'); return; }
+  showMsg('計算路線…');
+  try {
+    const u = 'https://router.project-osrm.org/route/v1/driving/' +
+      me.lng + ',' + me.lat + ';' + d.lng + ',' + d.lat + '?overview=false&steps=true';
+    const j = await (await fetch(u)).json();
+    const r = (j.routes||[])[0];
+    if (!r) throw new Error('no route');
+    steps = (r.legs && r.legs[0] && r.legs[0].steps) || [];
+    stepIdx = Math.min(1, Math.max(0, steps.length-1));
+    hideMsg(); render();
+  } catch (e) { showMsg('算路失敗，檢查網路後再試'); }
+}
+function remaining() {
+  if (!steps.length) return { dist: dest && me ? haversine(me, dest) : 0, dur: 0 };
+  let dist=0, dur=0;
+  for (let i=stepIdx;i<steps.length;i++){ dist+=steps[i].distance; dur+=steps[i].duration; }
+  return { dist, dur };
+}
+function render() {
+  if (!steps.length) {
+    setTurn('straight', dest ? '前往目的地' : '等待目的地', dest && me ? fmt(haversine(me, dest)) : '--');
+    if (dest && me) $('right').innerHTML = fmt(haversine(me, dest)) + '<small>直線距離</small>';
+    return;
+  }
+  const st = steps[stepIdx];
+  if (st) {
+    const key = maneuverKey(st.maneuver||{});
+    const loc = st.maneuver.location;
+    const d = me ? haversine(me, { lat: loc[1], lng: loc[0] }) : 0;
+    setTurn(key, LABELS[key] + (st.name ? ' · ' + st.name : ''), fmt(d));
+    if (me && d < 18 && stepIdx < steps.length-1) stepIdx++;
+  }
+  const rem = remaining();
+  const eta = new Date(Date.now() + rem.dur*1000);
+  const hh = String(eta.getHours()).padStart(2,'0'), mm = String(eta.getMinutes()).padStart(2,'0');
+  $('right').innerHTML = fmt(rem.dist) + '<small>約 ' + Math.max(1, Math.round(rem.dur/60)) + ' 分 · ' + hh + ':' + mm + ' 到</small>';
+}
+
+/* ---------- GPS ---------- */
+function onPos(p) {
+  const c = p.coords;
+  me = { lat: c.latitude, lng: c.longitude, speed: c.speed || 0 };
+  $('speed').innerHTML = Math.max(0, Math.round((c.speed||0)*3.6)) + '<small>KM/H</small>';
+  if (mapReady && meMarker) meMarker.setLatLng([me.lat, me.lng]);
+  render();
+}
+if (navigator.geolocation) {
+  navigator.geolocation.watchPosition(onPos, e => showMsg('定位失敗：' + e.message + '\n請允許定位（需 HTTPS 或已安裝的 App）'),
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
+} else showMsg('此瀏覽器不支援定位');
+
+/* ---------- 提示與控制 ---------- */
+function showMsg(t) { const m=$('msg'); m.textContent=t; m.style.display='grid'; }
+function hideMsg() { $('msg').style.display='none'; }
+function toggleControls(force) {
+  const c=$('controls');
+  const open = force !== undefined ? force : c.style.display !== 'flex';
+  c.style.display = open ? 'flex' : 'none';
+  clearTimeout(controlsTimer);
+  if (open) controlsTimer = setTimeout(() => c.style.display='none', 5000);
+}
+stage.addEventListener('click', e => { if (!e.target.closest('button')) toggleControls(); });
+
+$('mBtn').onclick = () => {
+  mirror = !mirror;
+  localStorage.setItem(MIRROR_KEY, mirror ? '1':'0');
+  stage.classList.toggle('mirror', mirror);
+  $('mBtn').classList.toggle('on', mirror);
+  $('mBtn').textContent = '鏡像：' + (mirror ? '開':'關');
+  toggleControls(true);
+};
+$('goBtn').onclick = () => { openSetup(); toggleControls(false); };
+$('reBtn').onclick = () => { if (dest) planRoute(dest); toggleControls(true); };
+
+/* ---------- 設定目的地 ---------- */
+function openSetup() {
+  $('setup').classList.add('open');
+  if (!map) {
+    map = L.map('map', { zoomControl: true }).setView(me ? [me.lat, me.lng] : [25.033, 121.5654], 15);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution:'© OpenStreetMap' }).addTo(map);
+    map.on('click', e => {
+      const name = '地圖選點 ' + e.latlng.lat.toFixed(4) + ',' + e.latlng.lng.toFixed(4);
+      setDest({ lat: e.latlng.lat, lng: e.latlng.lng, name });
+    });
+    mapReady = true;
+  }
+  setTimeout(() => {
+    map.invalidateSize();
+    if (me) {
+      if (!meMarker) meMarker = L.circleMarker([me.lat, me.lng], { radius: 8, color:'#1c7ed6', fillColor:'#1c7ed6', fillOpacity:1 }).addTo(map);
+      map.setView([me.lat, me.lng], 16);
+    }
+    if (dest) {
+      if (!destMarker) destMarker = L.marker([dest.lat, dest.lng]).addTo(map);
+      destMarker.setLatLng([dest.lat, dest.lng]);
+    }
+  }, 60);
+}
+function setDest(d) {
+  if (destMarker) destMarker.remove();
+  destMarker = null;
+  planRoute(d).then(() => {
+    if (mapReady && dest) destMarker = L.marker([dest.lat, dest.lng]).addTo(map);
+    $('setup').classList.remove('open');
+  });
+}
+$('closeBtn').onclick = () => $('setup').classList.remove('open');
+async function search() {
+  const q = $('q').value.trim();
+  if (!q) return;
+  showMsg('搜尋中…');
+  try {
+    const u = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&accept-language=zh-TW&q=' + encodeURIComponent(q);
+    const j = await (await fetch(u, { headers:{ 'Accept':'application/json' } })).json();
+    hideMsg();
+    if (!j.length) { showMsg('找不到這個地點'); setTimeout(hideMsg, 1600); return; }
+    setDest({ lat:+j[0].lat, lng:+j[0].lon, name:(j[0].display_name||q).split(',')[0] });
+  } catch (e) { showMsg('搜尋失敗，網路不通？'); setTimeout(hideMsg, 1600); }
+}
+$('sBtn').onclick = search;
+$('q').addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); search(); } });
+
+/* ---------- 螢幕恆亮 ---------- */
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+stage.addEventListener('click', keepAwake, { once:true });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible') keepAwake(); });
+
+/* ---------- 啟動 ---------- */
+stage.classList.toggle('mirror', mirror);
+$('mBtn').classList.toggle('on', mirror);
+$('mBtn').textContent = '鏡像：' + (mirror ? '開':'關');
+if (dest) { $('destName').textContent = '目的地：' + (dest.name || '選定點'); }
+render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
