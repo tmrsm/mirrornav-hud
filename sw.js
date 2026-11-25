@@ -1,4 +1,4 @@
-const CACHE = 'mirrornav-hud-v3';
+const CACHE = 'mirrornav-hud-v4';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {
