@@ -19,6 +19,7 @@
   #stage { position:fixed; inset:0; transform-origin:center; }
   #stage.mirror { transform:scaleX(-1); }
   #hudmap { position:absolute; inset:0; z-index:0; background:#000; }
+  #hudmap .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(1.15) saturate(.65); }
   #stage::before { content:''; position:absolute; inset:0; z-index:1; pointer-events:none;
     background: radial-gradient(ellipse at center, #0000 30%, #000a 100%),
                 linear-gradient(#000c, #0000 22%, #0000 68%, #000c); }
@@ -112,8 +113,8 @@ function initHudMap() {
   if (hudMap) return;
   hudMap = L.map('hudmap', { zoomControl: false, attributionControl: true, dragging: true, touchZoom: true })
     .setView(me ? [me.lat, me.lng] : [25.033, 121.5654], 17);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', {
-    maxZoom: 20, subdomains: 'abcd', attribution: '© OpenStreetMap © CARTO'
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
   }).addTo(hudMap);
   hudMe = L.circleMarker([0, 0], { radius: 9, color: '#fff', weight: 3, fillColor: '#1c7ed6', fillOpacity: 1 }).addTo(hudMap);
   hudMap.on('dragstart', () => { follow = false; });
