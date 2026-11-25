@@ -1,4 +1,4 @@
-const CACHE = 'mirrornav-hud-v4';
+const CACHE = 'mirrornav-hud-v5';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {
@@ -14,14 +14,31 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  const u = new URL(e.request.url);
-  if (u.origin !== location.origin) return; // 外部圖磚/算路 API 不攔
-  if (e.request.method !== 'GET') return;
+  const req = e.request;
+  const u = new URL(req.url);
+  if (u.origin !== location.origin) return;   // 外部圖磚/API 不攔
+  if (req.method !== 'GET') return;
+
+  const isDoc = req.mode === 'navigate' || (u.pathname.endsWith('/') || u.pathname.endsWith('.html'));
+
+  if (isDoc) {
+    // 頁面：網路優先，離線才用快取（避免更新被舊快取卡住）
+    e.respondWith(
+      fetch(req).then(resp => {
+        const copy = resp.clone();
+        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+        return resp;
+      }).catch(() => caches.match(req).then(hit => hit || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // 其他同源資源：快取優先
   e.respondWith(
-    caches.match(e.request).then(hit => hit || fetch(e.request).then(resp => {
+    caches.match(req).then(hit => hit || fetch(req).then(resp => {
       const copy = resp.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copy));
+      caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
       return resp;
-    }).catch(() => caches.match('./index.html')))
+    }))
   );
 });
