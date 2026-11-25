@@ -18,7 +18,11 @@
     font-family:-apple-system,"PingFang TC",sans-serif; color:var(--fg); }
   #stage { position:fixed; inset:0; transform-origin:center; }
   #stage.mirror { transform:scaleX(-1); }
-  #grid { position:absolute; inset:0; display:grid;
+  #hudmap { position:absolute; inset:0; z-index:0; background:#000; }
+  #stage::before { content:''; position:absolute; inset:0; z-index:1; pointer-events:none;
+    background: radial-gradient(ellipse at center, #0000 30%, #000a 100%),
+                linear-gradient(#000c, #0000 22%, #0000 68%, #000c); }
+  #grid { position:absolute; inset:0; z-index:2; display:grid;
     grid-template-columns:1fr 1.6fr 1fr; grid-template-rows:1fr auto;
     padding:calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 18px)
             calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 18px);
@@ -60,6 +64,7 @@
 </head>
 <body>
 <div id="stage" class="mirror">
+  <div id="hudmap"></div>
   <div id="grid">
     <div class="box"><div id="speed">0<small>KM/H</small></div></div>
     <div class="box">
@@ -76,6 +81,7 @@
   <div id="controls">
     <button id="mBtn" class="on">鏡像：開</button>
     <button id="goBtn">目的地</button>
+    <button id="ctrBtn">回中心</button>
     <button id="reBtn">重新算路</button>
   </div>
 </div>
@@ -100,6 +106,25 @@ let mirror = localStorage.getItem(MIRROR_KEY) !== '0';
 let me = null, dest = JSON.parse(localStorage.getItem(DEST_KEY) || 'null');
 let steps = [], stepIdx = 1, wakeLock = null, controlsTimer = null;
 let map = null, mapReady = false, meMarker = null, destMarker = null;
+let hudMap = null, hudMe = null, hudRoute = null, hudDest = null, follow = true;
+
+function initHudMap() {
+  if (hudMap) return;
+  hudMap = L.map('hudmap', { zoomControl: false, attributionControl: true, dragging: true, touchZoom: true })
+    .setView(me ? [me.lat, me.lng] : [25.033, 121.5654], 17);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', {
+    maxZoom: 20, subdomains: 'abcd', attribution: '© OpenStreetMap © CARTO'
+  }).addTo(hudMap);
+  hudMe = L.circleMarker([0, 0], { radius: 9, color: '#fff', weight: 3, fillColor: '#1c7ed6', fillOpacity: 1 }).addTo(hudMap);
+  hudMap.on('dragstart', () => { follow = false; });
+  setTimeout(() => hudMap.invalidateSize(), 80);
+}
+function drawRouteGeo(geo) {
+  if (!hudMap) initHudMap();
+  if (hudRoute) { hudRoute.remove(); hudRoute = null; }
+  if (!geo) return;
+  hudRoute = L.geoJSON(geo, { style: { color: '#28e0ff', weight: 9, opacity: 0.95, lineCap: 'round' } }).addTo(hudMap);
+}
 
 /* ---------- 幾何 ---------- */
 function haversine(a, b) {
@@ -149,12 +174,19 @@ async function planRoute(d) {
   showMsg('計算路線…');
   try {
     const u = 'https://router.project-osrm.org/route/v1/driving/' +
-      me.lng + ',' + me.lat + ';' + d.lng + ',' + d.lat + '?overview=false&steps=true';
+      me.lng + ',' + me.lat + ';' + d.lng + ',' + d.lat + '?overview=full&geometries=geojson&steps=true';
     const j = await (await fetch(u)).json();
     const r = (j.routes||[])[0];
     if (!r) throw new Error('no route');
     steps = (r.legs && r.legs[0] && r.legs[0].steps) || [];
     stepIdx = Math.min(1, Math.max(0, steps.length-1));
+    drawRouteGeo(r.geometry);
+    if (hudMap) {
+      if (hudDest) hudDest.remove();
+      hudDest = L.circleMarker([d.lat, d.lng], { radius: 10, color: '#ffb020', weight: 3, fillColor: '#ffb020', fillOpacity: 0.9 }).addTo(hudMap);
+      if (hudRoute) hudMap.fitBounds(hudRoute.getBounds(), { padding: [40, 40] });
+      follow = true;
+    }
     hideMsg(); render();
   } catch (e) { showMsg('算路失敗，檢查網路後再試'); }
 }
@@ -190,6 +222,10 @@ function onPos(p) {
   me = { lat: c.latitude, lng: c.longitude, speed: c.speed || 0 };
   $('speed').innerHTML = Math.max(0, Math.round((c.speed||0)*3.6)) + '<small>KM/H</small>';
   if (mapReady && meMarker) meMarker.setLatLng([me.lat, me.lng]);
+  if (hudMap) {
+    if (hudMe) hudMe.setLatLng([me.lat, me.lng]);
+    if (follow) hudMap.setView([me.lat, me.lng], hudMap.getZoom() || 17, { animate: false });
+  }
   render();
 }
 if (navigator.geolocation) {
@@ -218,6 +254,11 @@ $('mBtn').onclick = () => {
   toggleControls(true);
 };
 $('goBtn').onclick = () => { openSetup(); toggleControls(false); };
+$('ctrBtn').onclick = () => {
+  follow = true;
+  if (hudMap && me) hudMap.setView([me.lat, me.lng], 17);
+  toggleControls(true);
+};
 $('reBtn').onclick = () => { if (dest) planRoute(dest); toggleControls(true); };
 
 /* ---------- 設定目的地 ---------- */
@@ -280,6 +321,7 @@ stage.classList.toggle('mirror', mirror);
 $('mBtn').classList.toggle('on', mirror);
 $('mBtn').textContent = '鏡像：' + (mirror ? '開':'關');
 if (dest) { $('destName').textContent = '目的地：' + (dest.name || '選定點'); }
+initHudMap();
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
